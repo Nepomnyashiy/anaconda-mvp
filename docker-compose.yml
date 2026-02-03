@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # --- БАЗА ДАННЫХ ---
+  db:
+    image: postgres:16-alpine
+    container_name: anaconda_db
+    restart: always
+    environment:
+      POSTGRES_USER: anaconda_user
+      POSTGRES_PASSWORD: ***REMOVED***
+      POSTGRES_DB: anaconda_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # --- БЭКЕНД (API) ---
+  anaconda-api:
+    build: ./anaconda_api
+    container_name: anaconda_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME}
+      TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL}
+      DATABASE_URL: ${DATABASE_URL}
+      EMAIL_IMAP_HOST: ${EMAIL_IMAP_HOST}
+      EMAIL_IMAP_PORT: ${EMAIL_IMAP_PORT}
+      EMAIL_IMAP_USER: ${EMAIL_IMAP_USER}
+      EMAIL_IMAP_PASSWORD: ${EMAIL_IMAP_PASSWORD}
+      EMAIL_IMAP_SSL: ${EMAIL_IMAP_SSL}
+    volumes:
+      - ./anaconda_api:/app
+    restart: always
+
+  # --- ФРОНТЕНД (UI) ---
+  anaconda-web:
+    build: ./anaconda_web
+    container_name: anaconda_web
+    ports:
+      - "80:5173"
+    volumes:
+      - ./anaconda_web:/app
+      - /app/node_modules
+    depends_on:
+      - anaconda-api
+    restart: always
+
+volumes:
+  postgres_data:

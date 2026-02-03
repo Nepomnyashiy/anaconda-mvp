@@ -1,0 +1,25 @@
+---
+# Глобальные переменные для всех хостов
+
+# Пользователь приложения
+app_user: anaconda
+app_group: anaconda
+
+# Версии
+docker_version: "24.0.0"
+docker_compose_version: "2.23.0"
+
+# Сетевые порты
+api_port: 8000
+web_port: 80
+db_port: 5433
+db_internal_port: 5432
+
+# Таймауты
+connection_timeout: 30
+health_check_retries: 10
+health_check_delay: 5
+
+# Логирование
+log_level: INFO
+enable_ansible_log: true

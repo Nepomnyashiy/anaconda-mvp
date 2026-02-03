@@ -1,0 +1,8 @@
+---
+- name: restart docker compose
+  shell: |
+    cd {{ project_dir }}
+    docker-compose restart 2>/dev/null || docker compose restart
+  become: yes
+  become_user: "{{ app_user }}"
+  become_method: sudo

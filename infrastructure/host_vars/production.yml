@@ -1,0 +1,31 @@
+---
+# Специфичные переменные для production хоста
+
+# SSH параметры
+ansible_user: root
+ansible_port: 22
+
+# Путь к проекту
+project_dir: /opt/anaconda_mvp
+
+# Git репозиторий - используем локальный path для текущей сессии
+git_repo: /home/nsadmin/kip-service
+git_branch: main
+
+# Email настройки для production
+email_imap_host: imap.yandex.ru
+email_imap_port: 993
+email_imap_user: ***REMOVED***
+email_imap_password: "***REMOVED***"
+
+# Telegram для production
+telegram_bot_token: "***REMOVED***"
+telegram_bot_username: anaconda_mvp_bot
+telegram_webhook_url: "https://31.59.106.120:8000/api/webhook/telegram"
+
+# PostgreSQL
+postgres_password: "***REMOVED***"
+
+# Debug mode
+debug_mode: false
+

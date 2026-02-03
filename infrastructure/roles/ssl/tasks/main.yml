@@ -1,0 +1,40 @@
+---
+- name: Генерирование самоподписанного сертификата (если нужен)
+  block:
+    - name: Создание директории для сертификатов
+      file:
+        path: "{{ project_dir }}/certs"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0755'
+      when: environment_type == "development"
+    
+    - name: Генерирование SSL сертификата (для dev)
+      shell: |
+        openssl req -x509 -newkey rsa:4096 -keyout {{ project_dir }}/certs/key.pem \
+        -out {{ project_dir }}/certs/cert.pem -days 365 -nodes \
+        -subj "/C=RU/ST=State/L=City/O=Organization/CN=localhost"
+      args:
+        creates: "{{ project_dir }}/certs/cert.pem"
+      when: environment_type == "development"
+    
+    - name: Установка Let's Encrypt (для production)
+      apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+      when: environment_type == "production"
+    
+    - name: Получение сертификата Let's Encrypt
+      shell: |
+        certbot certonly --standalone \
+        -d {{ domain_name }} \
+        -m {{ admin_email }} \
+        --agree-tos --non-interactive
+      when: 
+        - environment_type == "production"
+        - domain_name is defined
+      register: certbot_result
+      changed_when: "'Successfully received certificate' in certbot_result.stdout"

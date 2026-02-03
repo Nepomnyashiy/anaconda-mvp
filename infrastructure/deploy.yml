@@ -1,0 +1,62 @@
+---
+- name: Развертывание Anaconda MVP платформы
+  hosts: "{{ deploy_target | default('localhost_dev') }}"
+  become: yes
+  gather_facts: yes
+  
+  pre_tasks:
+    - name: Обновление информации о пакетах
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+    
+    - name: Установка основных зависимостей
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - python3-pip
+          - vim
+          - htop
+        state: present
+      when: ansible_os_family == "Debian"
+  
+  roles:
+    - role: docker
+      tags: [docker, infrastructure]
+    
+    - role: project
+      tags: [project, app]
+    
+    - role: ssl
+      tags: [ssl]
+      when: environment_type == "production"
+  
+  post_tasks:
+    - name: Проверка здоровья API
+      uri:
+        url: "http://{{ ansible_host }}:8000/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 5
+      until: health_check.status == 200
+      tags: [verify]
+    
+    - name: Результаты развертывания
+      debug:
+        msg: |
+          ✓ Развертывание завершено!
+          
+          Окружение: {{ environment_type }}
+          Хост: {{ ansible_host }}
+          Проект: {{ project_dir }}
+          
+          Услуги:
+          - API: http://{{ ansible_host }}:8000
+          - Web: http://{{ ansible_host }}:80
+          - Health: http://{{ ansible_host }}:8000/health
+      tags: [always]

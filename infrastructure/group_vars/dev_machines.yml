@@ -1,0 +1,11 @@
+---
+# Переменные для development машин
+environment_type: development
+git_branch: develop
+debug_mode: true
+
+# Простые пароли для dev
+postgres_password: "dev_password"
+telegram_bot_token: "dev_token"
+email_imap_user: "dev@example.com"
+email_imap_password: "dev_password"

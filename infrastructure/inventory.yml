@@ -1,0 +1,49 @@
+all:
+  vars:
+    # Переменные окружения проекта
+    ansible_connection: ssh
+    ansible_port: 22
+    ansible_python_interpreter: /usr/bin/python3
+    
+    # Директории
+    project_dir: /opt/anaconda_mvp
+    app_user: anaconda
+    app_group: anaconda
+    
+    # Docker
+    docker_version: "latest"
+    docker_compose_version: "latest"
+    
+    # Проект
+    git_repo: /home/nsadmin/kip-service
+    git_branch: "main"
+    
+  hosts:
+    production:
+      ansible_host: 31.59.106.120
+      ansible_user: root
+      ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
+      environment_type: production
+      service_name: anaconda-mvp
+      
+    staging:
+      ansible_host: "{{ staging_host | default('localhost') }}"
+      ansible_user: root
+      environment_type: staging
+      service_name: anaconda-mvp-staging
+      
+    localhost_dev:
+      ansible_host: localhost
+      ansible_connection: local
+      environment_type: development
+      service_name: anaconda-mvp-dev
+
+  children:
+    webservers:
+      hosts:
+        production:
+        staging:
+    
+    dev_machines:
+      hosts:
+        localhost_dev:

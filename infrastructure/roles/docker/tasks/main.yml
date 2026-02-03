@@ -1,0 +1,118 @@
+---
+- name: Установка Docker
+  block:
+    - name: Установка необходимых пакетов для подписи
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+      when: ansible_os_family == "Debian"
+    
+    - name: Создание директории для Docker ключей
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+      when: ansible_os_family == "Debian"
+    
+    - name: Скачивание Docker GPG ключа
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /tmp/docker.gpg
+        timeout: 30
+      when: ansible_os_family == "Debian"
+    
+    - name: Конвертирование GPG ключа
+      shell: gpg --dearmor < /tmp/docker.gpg > /etc/apt/keyrings/docker.gpg
+      when: ansible_os_family == "Debian"
+    
+    - name: Добавление Docker репозитория (новый формат)
+      shell: |
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+      when: ansible_os_family == "Debian"
+    
+    - name: Обновление кэша пакетов
+      apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+    
+    - name: Установка Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+      when: ansible_os_family == "Debian"
+    
+    - name: Запуск Docker сервиса
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+    
+    - name: Проверка установки Docker
+      shell: docker --version
+      register: docker_version_output
+      changed_when: false
+    
+    - name: Вывод версии Docker
+      debug:
+        msg: "{{ docker_version_output.stdout }}"
+
+- name: Создание пользователя для приложения
+  block:
+    - name: Создание группы приложения
+      group:
+        name: "{{ app_group }}"
+        state: present
+    
+    - name: Создание пользователя приложения
+      user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        home: "/home/{{ app_user }}"
+        shell: /bin/bash
+        createhome: yes
+        state: present
+      when: app_user != "root"
+    
+    - name: Добавление пользователя в docker группу
+      user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: yes
+      when: app_user != "root"
+    
+    - name: Создание директории .ssh для пользователя
+      file:
+        path: "/home/{{ app_user }}/.ssh"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0700'
+      when: app_user != "root"
+    
+    - name: Настройка sudo доступа для пользователя
+      lineinfile:
+        path: /etc/sudoers.d/{{ app_user }}
+        line: "{{ app_user }} ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose, /bin/systemctl"
+        create: yes
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      when: app_user != "root"
+    
+    - name: Вывод информации о пользователе
+      debug:
+        msg: |
+          ✓ Пользователь создан:
+          - Имя: {{ app_user }}
+          - Группа: {{ app_group }}
+          - Home: /home/{{ app_user }}
+          - Docker доступ: да
+          - Sudo доступ: да (docker, docker-compose, systemctl)

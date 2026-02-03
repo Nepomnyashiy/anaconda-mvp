@@ -1,0 +1,21 @@
+---
+# Переменные для production хостов
+environment_type: production
+git_branch: main
+debug_mode: false
+
+# Security
+postgres_password: "{{ vault_postgres_password | default('CHANGE_ME_IN_VAULT') }}"
+telegram_bot_token: "{{ vault_telegram_bot_token | default('') }}"
+
+# Email
+email_imap_user: "{{ vault_email_imap_user | default('') }}"
+email_imap_password: "{{ vault_email_imap_password | default('') }}"
+
+# Domain и SSL (для production)
+domain_name: anaconda-mvp.example.com
+admin_email: admin@example.com
+
+# Backup
+enable_backups: true
+backup_schedule: "0 2 * * *"  # Daily at 2 AM

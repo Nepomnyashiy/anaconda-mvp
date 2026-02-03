@@ -1,0 +1,138 @@
+---
+- name: Подготовка директории проекта
+  block:
+    - name: Создание директории проекта
+      file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0755'
+    
+    - name: Копирование кода проекта локально (для development)
+      block:
+        - name: Git клонирование/обновление проекта
+          git:
+            repo: "https://github.com/user/kip-service.git"
+            dest: "{{ project_dir }}"
+            version: "{{ git_branch }}"
+            depth: 1
+          become: yes
+          become_user: "{{ app_user }}"
+          become_method: sudo
+          ignore_errors: yes
+      
+      rescue:
+        - name: Копирование docker-compose.yml
+          copy:
+            src: /home/nsadmin/kip-service/docker-compose.yml
+            dest: "{{ project_dir }}/docker-compose.yml"
+            owner: "{{ app_user }}"
+            group: "{{ app_group }}"
+          ignore_errors: yes
+        
+        - name: Копирование anaconda_api директории
+          copy:
+            src: /home/nsadmin/kip-service/anaconda_api/
+            dest: "{{ project_dir }}/anaconda_api/"
+            owner: "{{ app_user }}"
+            group: "{{ app_group }}"
+          ignore_errors: yes
+        
+        - name: Копирование anaconda_web директории
+          copy:
+            src: /home/nsadmin/kip-service/anaconda_web/
+            dest: "{{ project_dir }}/anaconda_web/"
+            owner: "{{ app_user }}"
+            group: "{{ app_group }}"
+          ignore_errors: yes
+    
+    - name: Установка прав доступа на директорию проекта
+      shell: |
+        chown -R {{ app_user }}:{{ app_group }} {{ project_dir }}
+        chmod -R u+rwx,g+rx,o+rx {{ project_dir }}
+    
+    - name: Копирование .env файла
+      template:
+        src: env.j2
+        dest: "{{ project_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: '0600'
+      notify: restart docker compose
+
+- name: Запуск Docker Compose
+  block:
+    - name: Проверка docker-compose
+      shell: which docker-compose || which /usr/local/bin/docker-compose || docker compose version
+      register: compose_check
+      changed_when: false
+    
+    - name: Запуск docker-compose (старый синтаксис)
+      shell: |
+        cd {{ project_dir }}
+        docker-compose down 2>/dev/null || true
+        docker-compose up -d
+      environment:
+        DOCKER_BUILDKIT: 1
+        COMPOSE_DOCKER_CLI_BUILD: 1
+      register: compose_result
+      when: "'docker-compose' in compose_check.stdout"
+      become: yes
+      become_user: "{{ app_user }}"
+      become_method: sudo
+    
+    - name: Запуск docker-compose (новый синтаксис)
+      shell: |
+        cd {{ project_dir }}
+        docker compose down 2>/dev/null || true
+        docker compose up -d
+      environment:
+        DOCKER_BUILDKIT: 1
+        COMPOSE_DOCKER_CLI_BUILD: 1
+      register: compose_result
+      when: "'docker compose' in compose_check.stdout or 'docker-compose' not in compose_check.stdout"
+      become: yes
+      become_user: "{{ app_user }}"
+      become_method: sudo
+    
+    - name: Статус контейнеров
+      shell: "cd {{ project_dir }} && (docker-compose ps 2>/dev/null || docker compose ps)"
+      register: compose_status
+      changed_when: false
+      become: yes
+      become_user: "{{ app_user }}"
+      become_method: sudo
+    
+    - name: Вывод статуса
+      debug:
+        msg: "{{ compose_status.stdout }}"
+
+- name: Проверка сервисов
+  block:
+    - name: Ожидание запуска API (15 попыток)
+      uri:
+        url: "http://localhost:8000/health"
+        method: GET
+      register: api_health
+      retries: 15
+      delay: 2
+      until: api_health.status == 200
+      ignore_errors: yes
+    
+    - name: Проверка БД
+      shell: |
+        cd {{ project_dir }}
+        (docker-compose exec -T db pg_isready -U anaconda_user -h localhost 2>/dev/null || \
+         docker exec anaconda_db pg_isready -U anaconda_user -h localhost 2>/dev/null) || true
+      register: db_health
+      changed_when: false
+      become: yes
+      become_user: "{{ app_user }}"
+      become_method: sudo
+    
+    - name: Вывод статуса БД
+      debug:
+        msg: "{{ db_health.stdout }}"
+
+

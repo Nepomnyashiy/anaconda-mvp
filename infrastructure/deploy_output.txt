@@ -1,0 +1,18 @@
+[0;34mUsing /home/nsadmin/kip-service/infrastructure/ansible.cfg as config file[0m
+
+PLAY [Развертывание Anaconda MVP платформы] ************************************
+
+TASK [Gathering Facts] *********************************************************
+[0;32mok: [production][0m
+
+TASK [Обновление информации о пакетах] *****************************************
+[0;32mok: [production] => {"cache_update_time": 1770001246, "cache_updated": false, "changed": false}[0m
+
+TASK [Установка основных зависимостей] *****************************************
+[0;32mok: [production] => {"cache_update_time": 1770001246, "cache_updated": false, "changed": false}[0m
+
+TASK [docker : Установка необходимых пакетов для подписи] **********************
+[0;32mok: [production] => {"cache_update_time": 1770001246, "cache_updated": false, "changed": false}[0m
+
+TASK [docker : Создание директории для Docker ключей] **************************
+[0;32mok: [production] => {"changed": false, "gid": 0, "group": "root", "mode": "0755", "owner": "root", "path": "/etc/apt/keyrings", "size": 4096, "state": "directory", "uid": 0}[0m
