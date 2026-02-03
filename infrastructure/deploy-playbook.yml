@@ -1,0 +1,252 @@
+---
+# Anaconda MVP Deployment Playbook
+# Usage: ansible-playbook deploy.yml -i inventory.yml -e env=production
+
+- name: Deploy Anaconda MVP
+  hosts: all
+  gather_facts: yes
+  vars:
+    project_dir: /home/{{ deploy_user | default('nsadmin') }}/kip-service/anaconda_mvp
+    deploy_user: "{{ deploy_user | default('nsadmin') }}"
+    environment: "{{ env | default('development') }}"
+    timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+
+  pre_tasks:
+    - name: Check prerequisites
+      block:
+        - name: Verify Docker is installed
+          command: docker --version
+          register: docker_version
+          changed_when: false
+          failed_when: false
+
+        - name: Verify Docker Compose is installed
+          command: docker-compose --version
+          register: compose_version
+          changed_when: false
+          failed_when: false
+
+        - name: Display Docker versions
+          debug:
+            msg:
+              - "Docker: {{ docker_version.stdout }}"
+              - "Docker Compose: {{ compose_version.stdout }}"
+
+        - name: Fail if Docker not installed
+          fail:
+            msg: "Docker is not installed. Please run setup-deploy.sh first."
+          when: docker_version.rc != 0
+
+  tasks:
+    - name: Clone or update repository
+      block:
+        - name: Check if repository exists
+          stat:
+            path: "{{ project_dir }}/.git"
+          register: git_repo
+
+        - name: Clone repository
+          git:
+            repo: https://github.com/Nepomnyashiy/anaconda-mvp.git
+            dest: "{{ project_dir }}"
+            version: main
+          become_user: "{{ deploy_user }}"
+          when: not git_repo.stat.exists
+
+        - name: Update repository
+          git:
+            repo: https://github.com/Nepomnyashiy/anaconda-mvp.git
+            dest: "{{ project_dir }}"
+            version: main
+            update: yes
+          become_user: "{{ deploy_user }}"
+          when: git_repo.stat.exists
+          register: git_update
+
+        - name: Display git status
+          shell: "cd {{ project_dir }} && git log --oneline -1"
+          register: git_status
+          changed_when: false
+
+        - name: Show current commit
+          debug:
+            msg: "Current commit: {{ git_status.stdout }}"
+
+      tags:
+        - git
+        - always
+
+    - name: Configure environment
+      block:
+        - name: Check if .env exists
+          stat:
+            path: "{{ project_dir }}/.env"
+          register: env_file
+
+        - name: Copy .env from example
+          copy:
+            src: "{{ project_dir }}/env.example"
+            dest: "{{ project_dir }}/.env"
+            owner: "{{ deploy_user }}"
+            group: "{{ deploy_user }}"
+            mode: '0600'
+          when: not env_file.stat.exists
+
+        - name: Load environment file
+          slurp:
+            src: "{{ project_dir }}/.env"
+          register: env_content
+
+        - name: Display environment
+          debug:
+            msg: "Environment loaded for: {{ environment }}"
+
+      tags:
+        - config
+        - always
+
+    - name: Build Docker images
+      block:
+        - name: Build images
+          shell: "cd {{ project_dir }} && docker-compose build --no-cache"
+          register: build_output
+          become_user: "{{ deploy_user }}"
+
+        - name: Show build summary
+          debug:
+            msg: "Build completed"
+
+      tags:
+        - build
+        - docker
+
+    - name: Deploy services
+      block:
+        - name: Stop running containers
+          shell: "cd {{ project_dir }} && docker-compose down"
+          become_user: "{{ deploy_user }}"
+          ignore_errors: yes
+
+        - name: Start containers
+          shell: "cd {{ project_dir }} && docker-compose up -d"
+          become_user: "{{ deploy_user }}"
+          register: compose_up
+
+        - name: Wait for API to be ready
+          uri:
+            url: "http://localhost:8000/health"
+            method: GET
+            status_code: 200
+          register: api_health
+          until: api_health.status == 200
+          retries: 30
+          delay: 2
+          ignore_errors: yes
+
+        - name: Show container status
+          shell: "docker-compose ps"
+          become_user: "{{ deploy_user }}"
+          register: container_status
+          changed_when: false
+
+        - name: Display container status
+          debug:
+            msg: "{{ container_status.stdout_lines }}"
+
+      tags:
+        - deploy
+        - docker
+
+    - name: Health checks
+      block:
+        - name: Check API health
+          uri:
+            url: "http://localhost:8000/health"
+            method: GET
+          register: api_status
+          ignore_errors: yes
+
+        - name: API health status
+          debug:
+            msg:
+              - "Status: {{ api_status.status }}"
+              - "Database: {{ api_status.json.database }}"
+          when: api_status.status == 200
+
+        - name: Check services
+          shell: "docker-compose ps -q | wc -l"
+          register: container_count
+          changed_when: false
+
+        - name: Running containers count
+          debug:
+            msg: "Running containers: {{ container_count.stdout }}"
+
+      tags:
+        - health
+        - monitor
+
+    - name: Post-deployment tasks
+      block:
+        - name: Create deployment log
+          template:
+            src: deployment_log.j2
+            dest: "{{ project_dir }}/deployments/{{ timestamp }}.log"
+            owner: "{{ deploy_user }}"
+            group: "{{ deploy_user }}"
+          become: yes
+          ignore_errors: yes
+
+        - name: Display deployment summary
+          debug:
+            msg:
+              - "=========================================="
+              - "✅ DEPLOYMENT SUCCESSFUL"
+              - "=========================================="
+              - "Environment: {{ environment }}"
+              - "Project: {{ project_dir }}"
+              - "Timestamp: {{ ansible_date_time.iso8601 }}"
+              - "Hostname: {{ inventory_hostname }}"
+              - "=========================================="
+
+      tags:
+        - post
+
+  handlers:
+    - name: Restart containers
+      shell: "cd {{ project_dir }} && docker-compose restart"
+      become_user: "{{ deploy_user }}"
+
+  post_tasks:
+    - name: Cleanup
+      block:
+        - name: Remove unused Docker images
+          shell: "docker image prune -f"
+          changed_when: false
+          when: environment == 'production'
+
+        - name: Show disk usage
+          shell: "df -h | grep -E '^Filesystem|/$'"
+          register: disk_usage
+          changed_when: false
+
+        - name: Display disk usage
+          debug:
+            msg: "{{ disk_usage.stdout_lines }}"
+
+      tags:
+        - cleanup
+
+  rescue:
+    - name: Deployment failed
+      debug:
+        msg:
+          - "❌ DEPLOYMENT FAILED"
+          - "Error details available in deployment logs"
+          - "Check: docker-compose logs -f"
+
+    - name: Rollback to previous version
+      shell: "cd {{ project_dir }} && git reset --hard HEAD~1 && docker-compose up -d"
+      become_user: "{{ deploy_user }}"
+      when: environment == 'production' and rollback_on_failure | default(false)
+      ignore_errors: yes
