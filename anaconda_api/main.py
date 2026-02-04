@@ -22,6 +22,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://anaconda_user:***REMOVED*
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "anaconda_mvp_bot")
 TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "http://localhost:8000/api/webhook/telegram")
+TELEGRAM_USE_POLLING = os.getenv("TELEGRAM_USE_POLLING", "false").lower() == "true"
 
 # Email IMAP
 EMAIL_IMAP_HOST = os.getenv("EMAIL_IMAP_HOST", "imap.yandex.ru")
@@ -76,6 +77,9 @@ class Message(Base):
     sender = Column(String)
     sender_id = Column(String, index=True, nullable=True)
     text = Column(Text)
+    is_outbound = Column(Boolean, default=False)  # True = мы отправили
+    is_read = Column(Boolean, default=False)  # Статус прочтения
+    attachment_path = Column(String, nullable=True)  # Путь к файлу вложения
     created_at = Column(DateTime, default=datetime.now)
 
 class Lead(Base):
@@ -118,6 +122,14 @@ class OrganizationCreate(BaseModel):
     name: str
     inn: str = None
     is_vip: bool = False
+
+class SendMessageRequest(BaseModel):
+    """Запрос на отправку сообщения (SPEC-004)"""
+    contact_id: int = None  # ID контакта из БД (опционально)
+    sender_id: str = None   # Для неразобранных контактов (опционально)
+    channel: str  # "telegram" или "email"
+    text: str
+    # file: str = None  # base64 или путь (TODO: реализовать)
 
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="Anaconda MVP 1.0", description="Корпоративная платформа для единого окна продаж")
@@ -202,7 +214,8 @@ def telegram_polling_worker():
             logger.debug("Telegram polling timeout (expected)")
         except Exception as e:
             logger.error(f"Telegram polling error: {e}")
-            asyncio.sleep(5)
+            import time
+            time.sleep(5)
 
 # --- EMAIL IMAP POLLING ---
 last_email_uid = {}
@@ -529,8 +542,8 @@ async def get_chats(db: Session = Depends(get_db)):
             "source": last_msg.source,
             "sender_id": sender_id,
             "display_name": contact.name if contact else last_msg.sender,
-            "last_message": last_msg.text[:100] if last_msg.text else "",
-            "last_activity_ts": int(last_msg.created_at.timestamp()) if last_msg.created_at else 0,
+            "preview": last_msg.text[:80] if last_msg.text else "",
+            "time": last_msg.created_at.strftime("%H:%M") if last_msg.created_at else "",
             "unread": unread_count
         }
         
@@ -704,6 +717,404 @@ async def create_organization(org: OrganizationCreate, db: Session = Depends(get
     db.refresh(new_org)
     return {"id": new_org.id, "name": new_org.name, "is_vip": bool(new_org.is_vip)}
 
+
+# --- SPEC-004: НОВЫЕ API ENDPOINTS ---
+
+@app.get("/api/hub_structure")
+async def get_hub_structure(db: Session = Depends(get_db)):
+    """
+    SPEC-004: GET /api/hub_structure
+    Возвращает полное дерево для левого меню:
+    {
+      "unsorted": [{"sender_id": "...", "source": "...", "preview": "...", "time": "..."}],
+      "organizations": [{"id": 1, "name": "...", "contacts": [...]}]
+    }
+    """
+    from sqlalchemy import desc
+    
+    # 1. Получаем все сообщения, группируем по sender_id
+    all_messages = db.query(Message).filter(Message.is_outbound == False).order_by(desc(Message.created_at)).all()
+    
+    # Словарь: sender_id -> последнее сообщение
+    latest_by_sender = {}
+    for msg in all_messages:
+        if msg.sender_id and msg.sender_id not in latest_by_sender:
+            latest_by_sender[msg.sender_id] = msg
+    
+    # 2. Разделяем на "известные" и "неразобранные"
+    unsorted = []
+    org_contacts = {}  # org_id -> list of contacts
+    
+    for sender_id, last_msg in latest_by_sender.items():
+        # Ищем контакт в БД
+        contact = None
+        if last_msg.source == "email":
+            contact = db.query(Contact).filter(Contact.email == sender_id).first()
+        elif last_msg.source == "telegram":
+            contact = db.query(Contact).filter(Contact.telegram_id == sender_id).first()
+        
+        # Подсчитываем непрочитанные для этого sender_id
+        unread_count = db.query(Message).filter(
+            Message.sender_id == sender_id,
+            Message.is_read == False,
+            Message.is_outbound == False
+        ).count()
+        
+        # Форматируем время
+        time_str = last_msg.created_at.strftime("%H:%M") if last_msg.created_at else ""
+        
+        # 3. Если контакт не найден или без org_id -> "Неразобранное"
+        if not contact or not contact.org_id:
+            unsorted.append({
+                "sender_id": sender_id,
+                "source": last_msg.source,
+                "preview": last_msg.text[:80] if last_msg.text else "",
+                "time": time_str,
+                "display_name": last_msg.sender or sender_id
+            })
+        else:
+            # 4. Добавляем к организации
+            org_id = contact.org_id
+            if org_id not in org_contacts:
+                org_contacts[org_id] = []
+            
+            # Получаем доступные каналы
+            channels = []
+            if contact.telegram_id:
+                channels.append("telegram")
+            if contact.email:
+                channels.append("email")
+            
+            org_contacts[org_id].append({
+                "id": contact.id,
+                "name": contact.name,
+                "position": contact.position or "",
+                "channels": channels,
+                "unread_count": unread_count
+            })
+    
+    # 5. Формируем список организаций
+    organizations = []
+    for org_id, contacts in org_contacts.items():
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if org:
+            organizations.append({
+                "id": org.id,
+                "name": org.name,
+                "is_vip": bool(org.is_vip),
+                "contacts": contacts
+            })
+    
+    # Сортируем организации по имени
+    organizations.sort(key=lambda x: x["name"])
+    
+    return {
+        "unsorted": unsorted,
+        "organizations": organizations
+    }
+
+
+@app.get("/api/messages/by_sender/{sender_id}")
+async def get_messages_by_sender(sender_id: str, db: Session = Depends(get_db)):
+    """
+    Получить историю сообщений по sender_id (для неразобранных контактов).
+    Возвращает сообщения + информацию об отправителе.
+    """
+    from sqlalchemy import asc
+    from urllib.parse import unquote
+    
+    # Декодируем sender_id (может содержать @ для email)
+    sender_id = unquote(sender_id)
+    
+    # Получаем все сообщения для этого sender_id
+    messages = db.query(Message).filter(
+        Message.sender_id == sender_id
+    ).order_by(asc(Message.created_at)).all()
+    
+    if not messages:
+        raise HTTPException(status_code=404, detail=f"No messages found for sender_id={sender_id}")
+    
+    # Определяем source и sender_name из первого сообщения
+    first_msg = messages[0]
+    
+    # Отмечаем входящие как прочитанные
+    db.query(Message).filter(
+        Message.sender_id == sender_id,
+        Message.is_read == False,
+        Message.is_outbound == False
+    ).update({Message.is_read: True}, synchronize_session=False)
+    db.commit()
+    
+    return {
+        "sender_info": {
+            "sender_id": sender_id,
+            "source": first_msg.source,
+            "display_name": first_msg.sender
+        },
+        "messages": [
+            {
+                "id": m.id,
+                "source": m.source,
+                "text": m.text,
+                "is_outbound": bool(m.is_outbound),
+                "is_read": bool(m.is_read),
+                "created_at": m.created_at.isoformat() if m.created_at else None
+            } for m in messages
+        ]
+    }
+
+
+@app.get("/api/history/{contact_id}")
+async def get_contact_history(contact_id: int, db: Session = Depends(get_db)):
+    """
+    SPEC-004: GET /api/history/{contact_id}
+    Агрегирует историю из всех каналов этого человека.
+    """
+    from sqlalchemy import or_, asc
+    
+    # 1. Получаем контакт
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail=f"Contact {contact_id} not found")
+    
+    # 2. Собираем условия поиска по всем каналам контакта
+    conditions = []
+    if contact.email:
+        conditions.append(Message.sender_id == contact.email)
+    if contact.telegram_id:
+        conditions.append(Message.sender_id == contact.telegram_id)
+    
+    if not conditions:
+        return {"contact": {"id": contact.id, "name": contact.name}, "messages": []}
+    
+    # 3. Получаем все сообщения (входящие + исходящие)
+    messages = db.query(Message).filter(or_(*conditions)).order_by(asc(Message.created_at)).all()
+    
+    # 4. Отмечаем как прочитанные
+    db.query(Message).filter(
+        or_(*conditions),
+        Message.is_read == False,
+        Message.is_outbound == False
+    ).update({Message.is_read: True}, synchronize_session=False)
+    db.commit()
+    
+    # 5. Формируем ответ
+    result_messages = []
+    for msg in messages:
+        result_messages.append({
+            "id": msg.id,
+            "source": msg.source,
+            "text": msg.text,
+            "is_outbound": bool(msg.is_outbound),
+            "is_read": bool(msg.is_read),
+            "attachment_path": msg.attachment_path,
+            "created_at": msg.created_at.isoformat() if msg.created_at else None
+        })
+    
+    # 6. Получаем организацию
+    org = None
+    if contact.org_id:
+        org_obj = db.query(Organization).filter(Organization.id == contact.org_id).first()
+        if org_obj:
+            org = {"id": org_obj.id, "name": org_obj.name, "is_vip": bool(org_obj.is_vip)}
+    
+    return {
+        "contact": {
+            "id": contact.id,
+            "name": contact.name,
+            "position": contact.position,
+            "email": contact.email,
+            "telegram_id": contact.telegram_id,
+            "organization": org
+        },
+        "messages": result_messages
+    }
+
+
+@app.post("/api/send")
+async def send_message(req: SendMessageRequest, db: Session = Depends(get_db)):
+    """
+    SPEC-004: POST /api/send
+    Единый метод отправки сообщения.
+    
+    Вход:
+    - contact_id: ID контакта (для известных)
+    - sender_id: прямой ID (для неразобранных)
+    - channel: 'telegram' или 'email'
+    - text: текст сообщения
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    # 1. Определяем получателя
+    recipient_id = None
+    
+    if req.contact_id:
+        # Отправка через известный контакт
+        contact = db.query(Contact).filter(Contact.id == req.contact_id).first()
+        if not contact:
+            raise HTTPException(status_code=404, detail=f"Contact {req.contact_id} not found")
+        
+        if req.channel == "telegram":
+            if not contact.telegram_id:
+                raise HTTPException(status_code=400, detail="Contact has no telegram_id")
+            recipient_id = contact.telegram_id
+        elif req.channel == "email":
+            if not contact.email:
+                raise HTTPException(status_code=400, detail="Contact has no email")
+            recipient_id = contact.email
+    
+    elif req.sender_id:
+        # Прямая отправка по sender_id (для неразобранных)
+        recipient_id = req.sender_id
+    
+    else:
+        raise HTTPException(status_code=400, detail="Either contact_id or sender_id must be provided")
+    
+    # 2. Отправляем сообщение
+    if req.channel == "telegram":
+        # 2a. Отправляем в Telegram
+        if not TELEGRAM_BOT_TOKEN:
+            raise HTTPException(status_code=500, detail="TELEGRAM_BOT_TOKEN not configured")
+        
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": recipient_id,
+                "text": req.text
+            }
+            response = requests.post(url, json=payload, timeout=10)
+            result = response.json()
+            
+            if not result.get("ok"):
+                logger.error(f"Telegram send error: {result}")
+                raise HTTPException(status_code=500, detail=f"Telegram error: {result.get('description')}")
+            
+            logger.info(f"✓ Telegram message sent to {recipient_id}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Telegram request error: {e}")
+            raise HTTPException(status_code=500, detail=f"Network error: {e}")
+    
+    elif req.channel == "email":
+        # 2b. Отправляем Email через SMTP
+        EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.yandex.ru")
+        EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "465"))
+        EMAIL_SMTP_USER = os.getenv("EMAIL_SMTP_USER", EMAIL_IMAP_USER)
+        EMAIL_SMTP_PASSWORD = os.getenv("EMAIL_SMTP_PASSWORD", EMAIL_IMAP_PASSWORD)
+        
+        if not EMAIL_SMTP_USER or not EMAIL_SMTP_PASSWORD:
+            raise HTTPException(status_code=500, detail="Email SMTP credentials not configured")
+        
+        try:
+            msg = MIMEMultipart()
+            msg["From"] = EMAIL_SMTP_USER
+            msg["To"] = recipient_id
+            msg["Subject"] = "Сообщение от Anaconda"
+            msg.attach(MIMEText(req.text, "plain", "utf-8"))
+            
+            with smtplib.SMTP_SSL(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT) as server:
+                server.login(EMAIL_SMTP_USER, EMAIL_SMTP_PASSWORD)
+                server.send_message(msg)
+            
+            logger.info(f"✓ Email sent to {recipient_id}")
+        except Exception as e:
+            logger.error(f"Email send error: {e}")
+            raise HTTPException(status_code=500, detail=f"Email error: {e}")
+    
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown channel: {req.channel}")
+    
+    # 4. Сохраняем сообщение в БД как исходящее
+    new_msg = Message(
+        source=req.channel,
+        sender="Anaconda",
+        sender_id=recipient_id,
+        text=req.text,
+        is_outbound=True,
+        is_read=True
+    )
+    db.add(new_msg)
+    db.commit()
+    db.refresh(new_msg)
+    
+    return {
+        "status": "ok",
+        "message_id": new_msg.id,
+        "channel": req.channel,
+        "recipient": recipient_id
+    }
+
+
+@app.post("/api/link_contact")
+async def link_contact(request: Request, db: Session = Depends(get_db)):
+    """
+    SPEC-004: POST /api/link_contact
+    Превращает "Неразобранное" в "Сотрудника".
+    
+    Вход: { "sender_id": "tg_555", "name": "Петр", "org_id": 1 }
+    """
+    data = await request.json()
+    
+    sender_id = data.get("sender_id")
+    name = data.get("name")
+    org_id = data.get("org_id")
+    position = data.get("position", "")
+    
+    if not sender_id or not name or not org_id:
+        raise HTTPException(status_code=400, detail="sender_id, name, and org_id are required")
+    
+    # 1. Определяем источник по sender_id (смотрим в messages)
+    last_msg = db.query(Message).filter(Message.sender_id == sender_id).first()
+    if not last_msg:
+        raise HTTPException(status_code=404, detail=f"No messages found for sender_id={sender_id}")
+    
+    source = last_msg.source
+    
+    # 2. Проверяем организацию
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail=f"Organization {org_id} not found")
+    
+    # 3. Проверяем, не существует ли уже контакт
+    existing = None
+    if source == "email":
+        existing = db.query(Contact).filter(Contact.email == sender_id).first()
+    elif source == "telegram":
+        existing = db.query(Contact).filter(Contact.telegram_id == sender_id).first()
+    
+    if existing:
+        # Обновляем существующий контакт
+        existing.name = name
+        existing.org_id = org_id
+        if position:
+            existing.position = position
+        db.commit()
+        logger.info(f"✓ Contact updated: {name} -> {org.name}")
+        return {"status": "ok", "action": "updated", "contact_id": existing.id}
+    
+    # 4. Создаем новый контакт
+    new_contact = Contact(
+        name=name,
+        position=position,
+        org_id=org_id,
+        email=sender_id if source == "email" else None,
+        telegram_id=sender_id if source == "telegram" else None
+    )
+    db.add(new_contact)
+    db.commit()
+    db.refresh(new_contact)
+    
+    logger.info(f"✓ Contact created: {name} ({source}={sender_id}) -> {org.name}")
+    
+    return {
+        "status": "ok",
+        "action": "created",
+        "contact_id": new_contact.id,
+        "organization": org.name
+    }
+
+
 # --- STARTUP/SHUTDOWN ---
 @app.on_event("startup")
 async def startup_event():
@@ -723,10 +1134,14 @@ async def startup_event():
     finally:
         db.close()
     
-    if TELEGRAM_BOT_TOKEN:
+    # Запускаем Telegram polling только если явно включен (TELEGRAM_USE_POLLING=true)
+    # По умолчанию используется webhook
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_USE_POLLING:
         thread = threading.Thread(target=telegram_polling_worker, daemon=True)
         thread.start()
         logger.info("✓ Telegram polling thread started")
+    elif TELEGRAM_BOT_TOKEN:
+        logger.info("ℹ Telegram polling disabled (using webhook mode). Set TELEGRAM_USE_POLLING=true to enable polling.")
     
     if EMAIL_IMAP_USER and EMAIL_IMAP_PASSWORD:
         thread = threading.Thread(target=email_polling_worker, daemon=True)
