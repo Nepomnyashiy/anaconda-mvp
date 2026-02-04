@@ -29,10 +29,6 @@
     
     - role: project
       tags: [project, app]
-    
-    - role: ssl
-      tags: [ssl]
-      when: environment_type == "production"
   
   post_tasks:
     - name: Проверка здоровья API

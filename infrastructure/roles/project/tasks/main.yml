@@ -13,9 +13,9 @@
       block:
         - name: Git клонирование/обновление проекта
           git:
-            repo: "https://github.com/user/kip-service.git"
+            repo: "https://github.com/Nepomnyashiy/anaconda-mvp.git"
             dest: "{{ project_dir }}"
-            version: "{{ git_branch }}"
+            version: "{{ git_branch | default('main') }}"
             depth: 1
           become: yes
           become_user: "{{ app_user }}"

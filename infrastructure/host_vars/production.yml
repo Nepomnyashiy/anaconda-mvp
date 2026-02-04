@@ -8,8 +8,8 @@ ansible_port: 22
 # Путь к проекту
 project_dir: /opt/anaconda_mvp
 
-# Git репозиторий - используем локальный path для текущей сессии
-git_repo: /home/nsadmin/kip-service
+# Git репозиторий
+git_repo: https://github.com/Nepomnyashiy/anaconda-mvp.git
 git_branch: main
 
 # Email настройки для production
