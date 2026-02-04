@@ -8,9 +8,10 @@ from email.header import decode_header
 from datetime import datetime
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, ForeignKey, Boolean, or_, and_
 from sqlalchemy.orm import sessionmaker, Session, declarative_base, relationship
 from pydantic import BaseModel
+from typing import Optional
 import requests
 
 # --- ЛОГИРОВАНИЕ ---
@@ -69,18 +70,22 @@ class Contact(Base):
     
     # Relationship
     org = relationship("Organization", back_populates="contacts")
+    messages = relationship("Message", back_populates="contact")
 
 class Message(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String)  # telegram, email, max
     sender = Column(String)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
     sender_id = Column(String, index=True, nullable=True)
     text = Column(Text)
     is_outbound = Column(Boolean, default=False)  # True = мы отправили
     is_read = Column(Boolean, default=False)  # Статус прочтения
     attachment_path = Column(String, nullable=True)  # Путь к файлу вложения
     created_at = Column(DateTime, default=datetime.now)
+    
+    contact = relationship("Contact", back_populates="messages")
 
 class Lead(Base):
     __tablename__ = "leads"
@@ -130,6 +135,14 @@ class SendMessageRequest(BaseModel):
     channel: str  # "telegram" или "email"
     text: str
     # file: str = None  # base64 или путь (TODO: реализовать)
+
+class ContactUpdate(BaseModel):
+    name: Optional[str] = None
+    position: Optional[str] = None
+    org_id: Optional[int] = None
+    email: Optional[str] = None
+    telegram_id: Optional[str] = None
+
 
 # --- ПРИЛОЖЕНИЕ ---
 app = FastAPI(title="Anaconda MVP 1.0", description="Корпоративная платформа для единого окна продаж")
@@ -702,6 +715,39 @@ async def create_contact(contact: ContactCreate, db: Session = Depends(get_db)):
         db.rollback()
         return {"status": "error", "message": str(e)}
 
+
+@app.patch("/api/contacts/{contact_id}")
+async def update_contact(contact_id: int, payload: ContactUpdate, db: Session = Depends(get_db)):
+    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    if payload.name:
+        contact.name = payload.name
+    if payload.position:
+        contact.position = payload.position
+    if payload.org_id is not None:
+        contact.org_id = payload.org_id
+    if payload.email:
+        contact.email = payload.email
+    if payload.telegram_id:
+        contact.telegram_id = payload.telegram_id
+
+    db.commit()
+    db.refresh(contact)
+
+    return {
+        "status": "ok",
+        "contact": {
+            "id": contact.id,
+            "name": contact.name,
+            "position": contact.position,
+            "org_id": contact.org_id,
+            "email": contact.email,
+            "telegram_id": contact.telegram_id
+        }
+    }
+
 @app.get("/api/organizations")
 async def get_organizations(db: Session = Depends(get_db)):
     """Получить список организаций"""
@@ -731,85 +777,99 @@ async def get_hub_structure(db: Session = Depends(get_db)):
     }
     """
     from sqlalchemy import desc
-    
-    # 1. Получаем все сообщения, группируем по sender_id
-    all_messages = db.query(Message).filter(Message.is_outbound == False).order_by(desc(Message.created_at)).all()
-    
-    # Словарь: sender_id -> последнее сообщение
-    latest_by_sender = {}
-    for msg in all_messages:
-        if msg.sender_id and msg.sender_id not in latest_by_sender:
-            latest_by_sender[msg.sender_id] = msg
-    
-    # 2. Разделяем на "известные" и "неразобранные"
-    unsorted = []
-    org_contacts = {}  # org_id -> list of contacts
-    
-    for sender_id, last_msg in latest_by_sender.items():
-        # Ищем контакт в БД
+
+    batch_msgs = db.query(Message).filter(Message.is_outbound == False).order_by(desc(Message.created_at)).all()
+
+    unsorted_map: dict[str, dict] = {}
+    contact_map: dict[int, dict] = {}
+
+    for msg in batch_msgs:
+        key = msg.sender_id or f"{msg.source}_{msg.id}"
+        if key in unsorted_map:
+            continue
+
+        preview = (msg.text or "")[:80]
+        timestamp = msg.created_at.isoformat() if msg.created_at else ""
+
+        base_entry = {
+            "sender_id": msg.sender_id,
+            "source": msg.source,
+            "preview": preview,
+            "time": timestamp,
+            "display_name": msg.sender or msg.sender_id,
+            "last_message": preview,
+            "last_message_time": timestamp,
+            "unread": db.query(Message).filter(
+                Message.sender_id == msg.sender_id,
+                Message.is_outbound == False,
+                Message.is_read == False
+            ).count()
+        }
+
         contact = None
-        if last_msg.source == "email":
-            contact = db.query(Contact).filter(Contact.email == sender_id).first()
-        elif last_msg.source == "telegram":
-            contact = db.query(Contact).filter(Contact.telegram_id == sender_id).first()
-        
-        # Подсчитываем непрочитанные для этого sender_id
-        unread_count = db.query(Message).filter(
-            Message.sender_id == sender_id,
-            Message.is_read == False,
-            Message.is_outbound == False
-        ).count()
-        
-        # Форматируем время
-        time_str = last_msg.created_at.strftime("%H:%M") if last_msg.created_at else ""
-        
-        # 3. Если контакт не найден или без org_id -> "Неразобранное"
-        if not contact or not contact.org_id:
-            unsorted.append({
-                "sender_id": sender_id,
-                "source": last_msg.source,
-                "preview": last_msg.text[:80] if last_msg.text else "",
-                "time": time_str,
-                "display_name": last_msg.sender or sender_id
-            })
-        else:
-            # 4. Добавляем к организации
-            org_id = contact.org_id
-            if org_id not in org_contacts:
-                org_contacts[org_id] = []
-            
-            # Получаем доступные каналы
+        if msg.source == "telegram":
+            contact = db.query(Contact).filter(Contact.telegram_id == msg.sender_id).first()
+        elif msg.source == "email":
+            contact = db.query(Contact).filter(Contact.email == msg.sender_id).first()
+
+        if contact and contact.org_id:
+            if contact.org_id not in contact_map:
+                contact_map[contact.org_id] = {
+                    "org_id": contact.org_id,
+                    "contacts": [],
+                    "total_unread": 0,
+                    "last_activity_time": None
+                }
+
             channels = []
             if contact.telegram_id:
                 channels.append("telegram")
             if contact.email:
                 channels.append("email")
-            
-            org_contacts[org_id].append({
-                "id": contact.id,
-                "name": contact.name,
+
+            contact_entry = {
+                "contact_id": contact.id,
+                "display_name": contact.name,
                 "position": contact.position or "",
                 "channels": channels,
-                "unread_count": unread_count
-            })
-    
-    # 5. Формируем список организаций
+                "source": msg.source,
+                "last_message": preview,
+                "last_message_time": timestamp,
+                "unread": base_entry["unread"]
+            }
+
+            contact_map[contact.org_id]["contacts"].append(contact_entry)
+            contact_map[contact.org_id]["total_unread"] += base_entry["unread"]
+
+            if msg.created_at:
+                current = contact_map[contact.org_id]["last_activity_time"]
+                if not current or msg.created_at > current:
+                    contact_map[contact.org_id]["last_activity_time"] = msg.created_at
+        else:
+            unsorted_map[key] = {
+                **base_entry,
+                "chat_id": f"{msg.source}_{key}"
+            }
+
     organizations = []
-    for org_id, contacts in org_contacts.items():
+    for org_id, bucket in contact_map.items():
         org = db.query(Organization).filter(Organization.id == org_id).first()
-        if org:
-            organizations.append({
-                "id": org.id,
-                "name": org.name,
-                "is_vip": bool(org.is_vip),
-                "contacts": contacts
-            })
-    
-    # Сортируем организации по имени
-    organizations.sort(key=lambda x: x["name"])
-    
+        if not org:
+            continue
+
+        organizations.append({
+            "id": org.id,
+            "name": org.name,
+            "is_vip": bool(org.is_vip),
+            "total_unread": bucket["total_unread"],
+            "last_activity_time": bucket["last_activity_time"].isoformat() if bucket["last_activity_time"] else "",
+            "contacts": bucket["contacts"]
+        })
+
+    organizations.sort(key=lambda x: (not x["is_vip"], x["name"]))
+
     return {
-        "unsorted": unsorted,
+        "unsorted": list(unsorted_map.values()),
         "organizations": organizations
     }
 
@@ -918,6 +978,12 @@ async def get_contact_history(contact_id: int, db: Session = Depends(get_db)):
         if org_obj:
             org = {"id": org_obj.id, "name": org_obj.name, "is_vip": bool(org_obj.is_vip)}
     
+    channels = []
+    if contact.telegram_id:
+        channels.append("telegram")
+    if contact.email:
+        channels.append("email")
+
     return {
         "contact": {
             "id": contact.id,
@@ -925,6 +991,7 @@ async def get_contact_history(contact_id: int, db: Session = Depends(get_db)):
             "position": contact.position,
             "email": contact.email,
             "telegram_id": contact.telegram_id,
+            "channels": channels,
             "organization": org
         },
         "messages": result_messages
@@ -1083,34 +1150,51 @@ async def link_contact(request: Request, db: Session = Depends(get_db)):
     elif source == "telegram":
         existing = db.query(Contact).filter(Contact.telegram_id == sender_id).first()
     
+    contact_id = None
+    action = "created"
+    
     if existing:
-        # Обновляем существующий контакт
         existing.name = name
         existing.org_id = org_id
         if position:
             existing.position = position
-        db.commit()
+        if source == "email":
+            existing.email = sender_id
+        elif source == "telegram":
+            existing.telegram_id = sender_id
+        contact_id = existing.id
+        action = "updated"
         logger.info(f"✓ Contact updated: {name} -> {org.name}")
-        return {"status": "ok", "action": "updated", "contact_id": existing.id}
+    else:
+        # 4. Создаем новый контакт
+        new_contact = Contact(
+            name=name,
+            position=position,
+            org_id=org_id,
+            email=sender_id if source == "email" else None,
+            telegram_id=sender_id if source == "telegram" else None
+        )
+        db.add(new_contact)
+        db.commit()
+        db.refresh(new_contact)
+        contact_id = new_contact.id
+        logger.info(f"✓ Contact created: {name} ({source}={sender_id}) -> {org.name}")
     
-    # 4. Создаем новый контакт
-    new_contact = Contact(
-        name=name,
-        position=position,
-        org_id=org_id,
-        email=sender_id if source == "email" else None,
-        telegram_id=sender_id if source == "telegram" else None
-    )
-    db.add(new_contact)
-    db.commit()
-    db.refresh(new_contact)
-    
-    logger.info(f"✓ Contact created: {name} ({source}={sender_id}) -> {org.name}")
+    # 5. Обновляем contact_id во всех сообщениях этого отправителя
+    if contact_id:
+        db.query(Message).filter(
+            Message.sender_id == sender_id
+        ).update(
+            {Message.contact_id: contact_id},
+            synchronize_session=False
+        )
+        db.commit()
+        logger.info(f"✓ Updated {db.query(Message).filter(Message.sender_id == sender_id).count()} messages with contact_id={contact_id}")
     
     return {
         "status": "ok",
-        "action": "created",
-        "contact_id": new_contact.id,
+        "action": action,
+        "contact_id": contact_id,
         "organization": org.name
     }
 

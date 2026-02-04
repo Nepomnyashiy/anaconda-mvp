@@ -1,12 +1,16 @@
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
+import pkg from '../package.json'
 
 // === STATE ===
+const APP_VERSION = pkg.version || '1.0.0'
+
 const chatData = ref({ unsorted: [], groups: [] })
 const selectedChat = ref(null)
 const selectedContact = ref(null)
 const expandedGroups = ref([])
 const showCreateContactModal = ref(false)
+const showEditContactModal = ref(false)
 const showOrgModal = ref(false)
 const loading = ref(true)
 const error = ref(null)
@@ -432,12 +436,25 @@ const getSourceBorderColor = (source, isOutbound) => {
     ]">
 
       <!-- Header -->
-      <div class="p-4 bg-slate-900 text-white flex justify-between items-center">
-        <h1 class="font-bold text-lg">Anaconda Hub</h1>
-        <span v-if="chatData.unsorted.length > 0" 
-              class="text-xs bg-red-600 px-2 py-1 rounded-full">
-          {{ chatData.unsorted.length }} новых
-        </span>
+      <div class="p-4 bg-gradient-to-r from-blue-900 to-slate-900 text-white flex justify-between items-center">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+            <i class="fa-solid fa-comments text-xl"></i>
+          </div>
+          <div>
+            <h1 class="font-bold text-xl tracking-tight">КИП-СЕРВИС</h1>
+            <p class="text-xs text-blue-200 opacity-80">Единое окно продаж</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-3">
+          <span v-if="chatData.unsorted.length > 0" 
+                class="text-xs bg-red-600 px-2 py-1 rounded-full animate-pulse">
+            {{ chatData.unsorted.length }} новых
+          </span>
+          <span class="text-xs bg-blue-700 px-2 py-1 rounded-full">
+            v{{ APP_VERSION }}
+          </span>
+        </div>
       </div>
 
       <!-- Unsorted Section -->
