@@ -1,78 +1,45 @@
-# Инструкция по настройке Anaconda MVP
+# Настройка Anaconda MVP
 
-## Настройка переменных окружения
+## Переменные окружения
 
-1. **Создайте файл `.env` на основе примера:**
-```bash
-cp env.example .env
-```
-
-2. **Отредактируйте `.env` файл и заполните реальными данными:**
-
-### База данных PostgreSQL
-```env
-POSTGRES_USER=anaconda_user
-POSTGRES_PASSWORD=***REMOVED***  # Измените на безопасный пароль
-POSTGRES_DB=anaconda_db
-DATABASE_URL=postgresql://anaconda_user:***REMOVED***@db:5432/anaconda_db
-```
-
-### Telegram Bot API
-```env
-TELEGRAM_BOT_TOKEN=***REMOVED***
-TELEGRAM_BOT_USERNAME=anaconda_mvp_bot
-TELEGRAM_WEBHOOK_URL=http://31.59.106.120:8000/api/webhook/telegram
-```
-
-**Важно:** Замените `31.59.106.120` на IP вашего сервера или домен.
-
-### Почта Яндекс (IMAP)
-```env
-EMAIL_IMAP_HOST=imap.yandex.ru
-EMAIL_IMAP_PORT=993
-EMAIL_IMAP_USER=***REMOVED***
-EMAIL_IMAP_PASSWORD=***REMOVED***
-EMAIL_IMAP_SSL=true
-```
-
-### Настройки приложения
-```env
-API_URL=http://31.59.106.120:8000/api
-FRONTEND_URL=http://31.59.106.120
-```
-
-## Настройка Telegram бота
-
-После запуска приложения настройте webhook для Telegram бота:
+Создайте локальный файл, который исключён из Git:
 
 ```bash
-curl http://localhost:8000/api/telegram/setup
+./CREATE_ENV.sh
 ```
 
-Или откройте в браузере:
+Заполните все placeholders в `.env`. Используйте отдельные credentials для
+production; не копируйте значения из документации или Git history.
+
+Обязательные группы переменных:
+
+- PostgreSQL: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
+  `DATABASE_URL`;
+- Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`,
+  `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_USE_POLLING`;
+- IMAP: `EMAIL_IMAP_HOST`, `EMAIL_IMAP_PORT`, `EMAIL_IMAP_USER`,
+  `EMAIL_IMAP_PASSWORD`, `EMAIL_IMAP_SSL`;
+- public URLs: `API_URL`, `FRONTEND_URL`.
+
+Для Docker Compose hostname PostgreSQL в `DATABASE_URL` — `db`. Для
+Kubernetes Secret значение `DATABASE_URL` не импортируется: deployment
+формирует его из `POSTGRES_PASSWORD` и Service `anaconda-postgres`.
+
+## Проверка
+
+После запуска:
+
+```bash
+curl -fsS http://localhost:8000/live
+curl -fsS http://localhost:8000/ready
 ```
-http://localhost:8000/api/telegram/setup
-```
 
-## Проверка работы
-
-1. **Проверка Telegram:**
-   - Отправьте сообщение боту `@anaconda_mvp_bot`
-   - Сообщение должно появиться в ленте на фронтенде
-
-2. **Проверка почты:**
-   - Отправьте тестовое письмо на настроенный email
-   - Или вручную запустите проверку:
-   ```bash
-   curl -X POST http://localhost:8000/api/email/check
-   ```
-
-3. **Проверка ленты:**
-   - Откройте `http://localhost` (или IP вашего сервера)
-   - Должны отображаться сообщения из Telegram и почты
+Настройку Telegram webhook выполняйте только через HTTPS endpoint и только
+после ротации credentials, если прежние значения когда-либо попадали в Git.
 
 ## Безопасность
 
-⚠️ **Важно:** Файл `.env` содержит секретные данные и не должен попадать в систему контроля версий (Git).
-
-Файл `.env` уже добавлен в `.gitignore`.
+- `.env` должен иметь mode `0600` и не должен попадать в Git.
+- Не логируйте token/password и не публикуйте их в issue, CI logs или docs.
+- Любой credential, обнаруженный в Git history, считается скомпрометированным
+  и подлежит ротации.

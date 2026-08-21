@@ -23,9 +23,6 @@ yarn-error.log*
 *.swo
 *~
 
-# Docker
-.dockerignore
-
 # Environment
 .env
 .env.local

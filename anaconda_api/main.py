@@ -19,7 +19,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- КОНФИГУРАЦИЯ ---
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://anaconda_user:***REMOVED***@db:5432/anaconda_db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL must be configured")
+
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "https://anaconda.godny.tech",
+    ).split(",")
+    if origin.strip()
+]
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "anaconda_mvp_bot")
 TELEGRAM_WEBHOOK_URL = os.getenv("TELEGRAM_WEBHOOK_URL", "http://localhost:8000/api/webhook/telegram")
@@ -32,7 +43,7 @@ EMAIL_IMAP_USER = os.getenv("EMAIL_IMAP_USER", "")
 EMAIL_IMAP_PASSWORD = os.getenv("EMAIL_IMAP_PASSWORD", "")
 EMAIL_IMAP_SSL = os.getenv("EMAIL_IMAP_SSL", "true").lower() == "true"
 
-logger.info(f"TELEGRAM_BOT_TOKEN: {TELEGRAM_BOT_TOKEN[:20]}..." if TELEGRAM_BOT_TOKEN else "TELEGRAM_BOT_TOKEN not set")
+logger.info("TELEGRAM_BOT_TOKEN configured: %s", bool(TELEGRAM_BOT_TOKEN))
 logger.info(f"TELEGRAM_WEBHOOK_URL: {TELEGRAM_WEBHOOK_URL}")
 logger.info(f"EMAIL_IMAP_HOST: {EMAIL_IMAP_HOST}, PORT: {EMAIL_IMAP_PORT}")
 logger.info(f"EMAIL_IMAP_USER: {EMAIL_IMAP_USER if EMAIL_IMAP_USER else 'not set'}")
@@ -149,7 +160,7 @@ app = FastAPI(title="Anaconda MVP 1.0", description="Корпоративная 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -369,8 +380,13 @@ def email_polling_worker():
 def root():
     return {"status": "ok", "service": "Anaconda MVP 1.0"}
 
-@app.get("/health")
-def health_check():
+@app.get("/live")
+def liveness_check():
+    return {"status": "alive"}
+
+
+@app.get("/ready")
+def readiness_check():
     try:
         with engine.connect() as conn:
             from sqlalchemy import text
@@ -383,7 +399,15 @@ def health_check():
         }
     except Exception as e:
         logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "database": "disconnected"}
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "unhealthy", "database": "disconnected"},
+        ) from e
+
+
+@app.get("/health")
+def health_check():
+    return readiness_check()
 
 @app.get("/api/messages")
 def read_messages(db: Session = Depends(get_db)):
@@ -1239,4 +1263,3 @@ async def shutdown_event():
     telegram_polling_active = False
     email_polling_active = False
     logger.info("✓ All polling workers stopped")
-

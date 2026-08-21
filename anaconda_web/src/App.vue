@@ -42,12 +42,14 @@ const selectedOrg = ref(null)
 
 // === API URL ===
 const getAPIUrl = () => {
+  const configuredUrl = import.meta.env.VITE_API_URL?.replace(/\/$/, '')
+  if (configuredUrl) return configuredUrl
+
   if (typeof window !== 'undefined') {
     const host = window.location.hostname
     if (host === 'localhost' || host === '127.0.0.1') {
       return 'http://localhost:8000/api'
     }
-    return `http://${host}:8000/api`
   }
   return '/api'
 }
