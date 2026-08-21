@@ -5,6 +5,7 @@ import threading
 import imaplib
 import email
 from email.header import decode_header
+from urllib.parse import quote_plus
 from datetime import datetime
 from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +22,18 @@ logger = logging.getLogger(__name__)
 # --- КОНФИГУРАЦИЯ ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL must be configured")
+    postgres_password = os.getenv("POSTGRES_PASSWORD")
+    if not postgres_password:
+        raise RuntimeError("DATABASE_URL or POSTGRES_PASSWORD must be configured")
+
+    postgres_user = os.getenv("POSTGRES_USER", "anaconda_user")
+    postgres_host = os.getenv("POSTGRES_HOST", "db")
+    postgres_port = os.getenv("POSTGRES_PORT", "5432")
+    postgres_db = os.getenv("POSTGRES_DB", "anaconda_db")
+    DATABASE_URL = (
+        f"postgresql://{quote_plus(postgres_user)}:{quote_plus(postgres_password)}"
+        f"@{postgres_host}:{postgres_port}/{quote_plus(postgres_db)}"
+    )
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
