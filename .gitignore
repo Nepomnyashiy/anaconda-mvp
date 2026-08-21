@@ -36,3 +36,4 @@ build/
 
 # Logs
 *.log
+infrastructure/deploy_output.txt

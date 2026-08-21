@@ -47,8 +47,9 @@ cd "$PROJECT_DIR"
 # 3. Setup environment
 echo -e "${YELLOW}⚙️ Setting up environment...${NC}"
 if [ ! -f .env ]; then
-    cp env.example .env
-    echo -e "${YELLOW}⚠️ Created .env from env.example${NC}"
+    cp .env.example .env
+    chmod 600 .env
+    echo -e "${YELLOW}⚠️ Created .env from .env.example${NC}"
     echo -e "${YELLOW}📝 Please edit .env with your settings:${NC}"
     echo "   - TELEGRAM_BOT_TOKEN"
     echo "   - EMAIL_IMAP_USER & PASSWORD"
@@ -67,11 +68,8 @@ if [ ! -f "$SSH_KEY_PATH" ]; then
     
     echo -e "${GREEN}✅ SSH key created${NC}"
     echo ""
-    echo -e "${YELLOW}📋 Add this to GitHub Secrets (DEPLOY_SSH_KEY):${NC}"
-    echo "================================"
-    cat "$SSH_KEY_PATH"
-    echo "================================"
-    echo ""
+    echo -e "${YELLOW}📋 Private key created at $SSH_KEY_PATH.${NC}"
+    echo -e "${YELLOW}Load it into GitHub Secrets locally without printing it to terminal.${NC}"
 else
     echo -e "${GREEN}✓ SSH key already exists${NC}"
 fi

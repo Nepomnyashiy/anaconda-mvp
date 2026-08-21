@@ -22,7 +22,7 @@
 
 1. **Создайте файл `.env` с настройками:**
 ```bash
-cp env.example .env
+cp .env.example .env
 # Отредактируйте .env и заполните реальными данными
 ```
 
@@ -98,7 +98,7 @@ docker compose logs -f
 anaconda/
 ├── docker-compose.yml      # Конфигурация всех сервисов
 ├── .env                    # Переменные окружения (в .gitignore)
-├── env.example             # Пример конфигурации
+├── .env.example            # Пример конфигурации
 ├── anaconda_api/           # FastAPI сервер (основной бэкенд)
 │   ├── main.py             # Точка входа приложения
 │   ├── requirements.txt     # Зависимости Python

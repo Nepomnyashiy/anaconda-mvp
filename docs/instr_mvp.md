@@ -60,7 +60,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: anaconda_user
-      POSTGRES_PASSWORD: ***REMOVED***
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: anaconda_db
     ports:
       - "5432:5432"
@@ -77,7 +77,7 @@ services:
       - db
     environment:
       # Строка подключения к БД внутри сети Docker
-      DATABASE_URL: postgresql://anaconda_user:***REMOVED***@db:5432/anaconda_db
+      DATABASE_URL: postgresql://anaconda_user:<POSTGRES_PASSWORD>@db:5432/anaconda_db
     volumes:
       - ./backend:/app
     restart: always
@@ -142,7 +142,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- БД SETUP ---
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://anaconda_user:***REMOVED***@db:5432/anaconda_db")
+DATABASE_URL = os.environ["DATABASE_URL"]
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

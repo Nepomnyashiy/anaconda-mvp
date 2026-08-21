@@ -24,7 +24,7 @@
 
     - name: Configure .env file
       copy:
-        src: "{{ project_dir }}/env.example"
+        src: "{{ project_dir }}/.env.example"
         dest: "{{ project_dir }}/.env"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"

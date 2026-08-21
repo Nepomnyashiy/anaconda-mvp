@@ -6,7 +6,7 @@ if [[ -e .env ]]; then
     exit 1
 fi
 
-cp env.example .env
+cp .env.example .env
 chmod 600 .env
 
 printf '%s\n' '.env created with placeholders and mode 0600.'
