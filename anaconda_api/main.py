@@ -58,7 +58,7 @@ EMAIL_IMAP_SSL = os.getenv("EMAIL_IMAP_SSL", "true").lower() == "true"
 logger.info("TELEGRAM_BOT_TOKEN configured: %s", bool(TELEGRAM_BOT_TOKEN))
 logger.info(f"TELEGRAM_WEBHOOK_URL: {TELEGRAM_WEBHOOK_URL}")
 logger.info(f"EMAIL_IMAP_HOST: {EMAIL_IMAP_HOST}, PORT: {EMAIL_IMAP_PORT}")
-logger.info(f"EMAIL_IMAP_USER: {EMAIL_IMAP_USER if EMAIL_IMAP_USER else 'not set'}")
+logger.info("EMAIL_IMAP_USER configured: %s", bool(EMAIL_IMAP_USER))
 
 # --- БД SETUP ---
 engine = create_engine(DATABASE_URL)
@@ -544,7 +544,7 @@ async def email_info():
     return {
         "imap_host": EMAIL_IMAP_HOST,
         "imap_port": EMAIL_IMAP_PORT,
-        "imap_user": EMAIL_IMAP_USER if EMAIL_IMAP_USER else "not configured",
+        "imap_user_configured": bool(EMAIL_IMAP_USER),
         "polling_active": email_polling_active,
         "last_checked_uids": len(last_email_uid.get("INBOX", []))
     }
